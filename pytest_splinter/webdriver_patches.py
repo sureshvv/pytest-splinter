@@ -12,6 +12,9 @@ import socket  # pragma: no cover
 from selenium.webdriver.remote import webelement, remote_connection  # pragma: no cover
 from selenium.webdriver.firefox import webdriver  # pragma: no cover
 from selenium.webdriver.remote.webdriver import WebDriver as RemoteWebDriver  # pragma: no cover
+from selenium.webdriver.android.webdriver import WebDriver as AndroidDriver
+from selenium.common.exceptions import WebDriverException
+from selenium.webdriver.remote.command import Command
 
 
 class LocalFileDetector(object):  # pragma: no cover
@@ -51,7 +54,30 @@ class LocalFileDetector(object):  # pragma: no cover
 old_request = remote_connection.RemoteConnection._request  # pragma: no cover
 # save the original execute
 RemoteWebDriver._base_execute = RemoteWebDriver.execute  # pragma: no cover
+# save the original send_keys
+old_send_keys = webelement.WebElement.send_keys
 
+def send_keys_patch(self, *value):
+    """ phantomjs 1.9.7/8 and 2.0 hang on send_keys for an input element of type file send_keys """
+    from selenium.webdriver.phantomjs.webdriver import WebDriver as PhantomJsWebdriver
+    if self.get_attribute('type') == 'file' and type(self.parent) == PhantomJsWebdriver:
+        local_file = self.parent.file_detector.is_local_file(*value)
+        if local_file is None:
+            return
+        try:
+            return self._execute(Command.UPLOAD_FILE,
+                        {'filepath': [local_file],
+                         'selector': 'input[type=file]'})['value']
+        except WebDriverException as e:
+            if "Unrecognized command: POST" in e.__str__():
+                return filename
+            elif "Command not found: POST " in e.__str__():
+                return filename
+            elif '{"status":405,"value":["GET","HEAD","DELETE"]}' in e.__str__():
+                return filename
+            else:
+                raise e
+    return old_send_keys(self, *value)
 
 def patch_webdriver(selenium_timeout):
     """Patch selenium webdriver to add functionality/fix issues."""
@@ -68,6 +94,7 @@ def patch_webdriver(selenium_timeout):
     remote_connection.RemoteConnection._request = _request
     # Apply the monkey patch for LocalFileDetector
     webelement.LocalFileDetector = LocalFileDetector
+    webelement.WebElement.send_keys = send_keys_patch
 
     # Apply the monkey patch to Firefox webdriver to disable native events
     # to avoid click on wrong elements, totally unpredictable
@@ -75,6 +102,10 @@ def patch_webdriver(selenium_timeout):
     webdriver.WebDriver.NATIVE_EVENTS_ALLOWED = False
 
     def execute(self, driver_command, params=None):
+        if driver_command == 'setWindowSize':
+            if type(self) == AndroidDriver:
+                result = {u'status': 0, u'name': u'setWindowSize', u'value': u''}
+                return result
         result = self._base_execute(driver_command, params)
         speed = self.get_speed()
         if speed > 0:
