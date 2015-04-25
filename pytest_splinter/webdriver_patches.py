@@ -58,16 +58,22 @@ RemoteWebDriver._base_execute = RemoteWebDriver.execute  # pragma: no cover
 old_send_keys = webelement.WebElement.send_keys
 
 def send_keys_patch(self, *value):
-    """ phantomjs 1.9.7/8 and 2.0 hang on send_keys for an input element of type file send_keys """
+    """Fix phantomjs(1.9.7, 1.9.8, 2.0) hang on send_keys for an input element of type file."""
     from selenium.webdriver.phantomjs.webdriver import WebDriver as PhantomJsWebdriver
-    if self.get_attribute('type') == 'file' and type(self.parent) == PhantomJsWebdriver:
+    if self.get_attribute('type') == 'file' and isinstance(self.parent, PhantomJsWebdriver):
         local_file = self.parent.file_detector.is_local_file(*value)
         if local_file is None:
             return
         try:
-            return self._execute(Command.UPLOAD_FILE,
+            elem_id = self.get_attribute('id').strip()
+            if elem_id:
+                return self._execute(Command.UPLOAD_FILE,
                         {'filepath': [local_file],
-                         'selector': 'input[type=file]'})['value']
+                         'selector': 'input[id="%s"]' % elem_id})['value']
+            else:
+                return self._execute(Command.UPLOAD_FILE,
+                        {'filepath': [local_file],
+                         'selector': 'input[type="file"]'})['value']
         except WebDriverException as e:
             if "Unrecognized command: POST" in e.__str__():
                 return filename
